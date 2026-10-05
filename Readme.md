@@ -13,7 +13,7 @@ First launch offers to import your Launcher Dolphin settings, controllers and ac
 ## TL;DR for devs
 
 - **Dolphin:** Each local player gets a Slippi netplay client in one process, sharing one Melee simulation and rollback engine. Extra locals feed inputs over ENet as remote peers. Dolphin handles slot mapping and synchronizes the clients.
-- **ASM:** Extended Teams CSS for 1–4 local cursors, independent character/costume/team picks and Start confirmations. Custom EXI commands (`0xC5`–`0xC8`) exchange controller data, selections and readiness with Dolphin, handle roster changes and restore picks for rematches.
+- **ASM:** Extended Teams CSS for 1-4 local cursors, independent character/costume/team picks and Start confirmations. Custom EXI commands (`0xC5`–`0xC8`) exchange controller data, selections and readiness with Dolphin, handle roster changes and restore picks for rematches.
 
 Existing matchmaking and remote packet formats are unchanged. Ship the paired executable, DLL and codeset together.
 
