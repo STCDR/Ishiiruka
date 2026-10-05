@@ -10,11 +10,10 @@ In Teams CSS, move P1's cursor into the **top-left grey corner** and press **A**
 
 First launch offers to import your Launcher Dolphin settings, controllers and account if this profile is still untouched.
 
-## TL;DR for Slippi devs
+## TL;DR for devs
 
-- **Dolphin:** coordinates multiple local clients in one Melee/rollback instance, maps controller ports to assigned slots, and handles readiness, rematches and cancellation. Local EXI commands: `0xC5`-`0xC8`.
-- **ASM:** simultaneous Teams CSS cursors, overlapping portraits, player-count toggle and independent Start confirmation. Local character/costume/team selections persist after matches.
-- **Rust:** local-first Launcher account lookup and optional first-run profile import. Both Yes and No are remembered; custom profiles skip the prompt. The Launcher profile stays unchanged.
+- **Dolphin:** Each local player gets a Slippi netplay client in one process, sharing one Melee simulation and rollback engine. Extra locals feed inputs over ENet as remote peers. Dolphin handles slot mapping and synchronizes the clients.
+- **ASM:** Extended Teams CSS for 1–4 local cursors, independent character/costume/team picks and Start confirmations. Custom EXI commands (`0xC5`–`0xC8`) exchange controller data, selections and readiness with Dolphin, handle roster changes and restore picks for rematches.
 
 Existing matchmaking and remote packet formats are unchanged. Ship the paired executable, DLL and codeset together.
 
