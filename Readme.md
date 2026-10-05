@@ -6,7 +6,7 @@
 
 In Teams CSS, move P1's cursor into the **top-left grey corner** and press **A** to cycle **1-4 local players**. Everyone picks a character/team and presses **Start**, then enter your usual Teams room code.
 
-![Change the local player count in Teams](https://i.imgur.com/h8VhhEJ.gif)
+![Change the local player count in Teams](docs/assets/local-player-toggle.gif)
 
 First launch offers to import your Launcher Dolphin settings, controllers and account if this profile is still untouched.
 
