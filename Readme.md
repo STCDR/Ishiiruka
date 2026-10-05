@@ -1,10 +1,9 @@
-# Slippi Dolphin: Matchmaking Teams with multiple local players
+## Slippi Dolphin: Matchmaking Teams with multiple local players
 
-## TL;DR
 
 **[Download the Windows ZIP](https://github.com/STCDR/Ishiiruka/releases)**, extract it and run `Slippi Dolphin.exe`.
 
-First launch offers to import your Launcher Dolphin settings, controllers and account if this profile is still untouched.
+First launch offers to import your Slippi Launcher Dolphin settings, controllers and account if this profile is still untouched.
 
 In Teams CSS, move P1's cursor into the **top-left grey corner** and press **A** to cycle **1-4 local players**. Everyone picks a character/team and presses **Start**, then enter your usual Teams room code.
 
