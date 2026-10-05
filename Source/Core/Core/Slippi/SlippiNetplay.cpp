@@ -36,7 +36,7 @@
 static std::mutex pad_mutex;
 static std::mutex ack_mutex;
 
-SlippiNetplayClient *SLIPPI_NETPLAY = nullptr;
+std::atomic<unsigned> SLIPPI_NETPLAY_CLIENT_COUNT{0};
 
 // called from ---GUI--- thread
 SlippiNetplayClient::~SlippiNetplayClient()
@@ -60,8 +60,9 @@ SlippiNetplayClient::~SlippiNetplayClient()
 		m_client = nullptr;
 	}
 
-	SLIPPI_NETPLAY = nullptr;
 
+
+	SLIPPI_NETPLAY_CLIENT_COUNT.fetch_sub(1);
 	WARN_LOG(SLIPPI_ONLINE, "Netplay client cleanup complete");
 }
 
@@ -95,7 +96,7 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
 		this->lastFrameAcked[i] = 0; // First frame should be 1 in this context so 0 is the correct reset (I think)
 	}
 
-	SLIPPI_NETPLAY = std::move(this);
+	SLIPPI_NETPLAY_CLIENT_COUNT.fetch_add(1);
 
 	// Local address
 	ENetAddress *localAddr = nullptr;
@@ -160,7 +161,7 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
 SlippiNetplayClient::SlippiNetplayClient(bool isDecider)
 {
 	this->isDecider = isDecider;
-	SLIPPI_NETPLAY = std::move(this);
+	SLIPPI_NETPLAY_CLIENT_COUNT.fetch_add(1);
 	slippiConnectStatus.store(SlippiConnectStatus::NET_CONNECT_STATUS_FAILED, std::memory_order_release);
 }
 
@@ -457,14 +458,15 @@ unsigned int SlippiNetplayClient::OnData(sf::Packet &packet, ENetPeer *peer)
 				ERROR_LOG(SLIPPI_ONLINE, "Got match selection packet with invalid player idx %d", idx);
 				break;
 			}
-			matchInfo.remotePlayerSelections[idx].Merge(*s);
+			{ std::lock_guard<std::mutex> lock(selectionMutex);
+      matchInfo.remotePlayerSelections[idx].Merge(*s); }
 
 			// This might be a good place to reset some logic? Game can't start until we receive this msg
 			// so this should ensure that everything is initialized before the game starts
 			hasGameStarted = false;
 
 			// Reset remote pad queue such that next inputs that we get are not compared to inputs from last game
-			remotePadQueue[idx].clear();
+			{ std::lock_guard<std::mutex> lock(pad_mutex); remotePadQueue[idx].clear(); }
 		}
 	}
 	break;
@@ -702,6 +704,14 @@ void SlippiNetplayClient::Send(sf::Packet &packet)
 	}
 }
 
+void SlippiNetplayClient::RequestStop()
+{
+  m_immediateShutdown.store(true, std::memory_order_release);
+  m_do_loop.Clear();
+  slippiConnectStatus.store(SlippiConnectStatus::NET_CONNECT_STATUS_DISCONNECTED, std::memory_order_release);
+  ENetUtil::WakeupThread(m_client);
+}
+
 void SlippiNetplayClient::Disconnect()
 {
 	ENetEvent netEvent;
@@ -721,11 +731,12 @@ void SlippiNetplayClient::Disconnect()
 			// that actually reaches the peer — it must forward the reason rather than send 0.
 			u32 reason = m_pendingDisconnectReason.load(std::memory_order_acquire);
 			INFO_LOG(SLIPPI_ONLINE, "[Netplay] Disconnecting peer %d with reason %u", peer.first->address.port, reason);
-			enet_peer_disconnect(peer.first, reason);
+      if (m_immediateShutdown.load(std::memory_order_acquire)) enet_peer_disconnect_now(peer.first, reason);
+      else enet_peer_disconnect(peer.first, reason);
 		}
 	}
 
-	while (enet_host_service(m_client, &netEvent, 3000) > 0)
+	while (!m_immediateShutdown.load(std::memory_order_acquire) && enet_host_service(m_client, &netEvent, 3000) > 0)
 	{
 		switch (netEvent.type)
 		{
@@ -752,7 +763,7 @@ void SlippiNetplayClient::Disconnect()
 	for (auto &active : playerActive)
 		active.store(false, std::memory_order_release);
 	m_server.clear();
-	SLIPPI_NETPLAY = nullptr;
+
 }
 
 void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
@@ -898,6 +909,11 @@ void SlippiNetplayClient::ThreadFunc()
 			}
 		}
 
+    if (m_immediateShutdown.load(std::memory_order_acquire))
+    {
+      Disconnect();
+      return;
+    }
 		bool allConnected = true;
 		for (int i = 0; i < m_remotePlayerCount; i++)
 		{
@@ -1182,6 +1198,7 @@ std::vector<int> SlippiNetplayClient::GetFailedConnections()
 
 void SlippiNetplayClient::StartSlippiGame()
 {
+  std::lock_guard<std::mutex> ackLock(ack_mutex);
 	// Reset variables to start a new game
 	hasGameStarted = false;
 
@@ -1205,7 +1222,7 @@ void SlippiNetplayClient::StartSlippiGame()
 	gamePrepStepQueue.clear();
 
 	// Reset match info for next game
-	matchInfo.Reset();
+	{ std::lock_guard<std::mutex> lock(selectionMutex); matchInfo.Reset(); }
 }
 
 void SlippiNetplayClient::SendConnectionSelected()
@@ -1219,6 +1236,7 @@ void SlippiNetplayClient::SendConnectionSelected()
 
 void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 {
+  std::lock_guard<std::mutex> ackLock(ack_mutex);
 	auto status = slippiConnectStatus.load(std::memory_order_acquire);
 	bool connectionFailed = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_FAILED;
 	bool connectionDisconnected = status == SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_DISCONNECTED;
@@ -1317,6 +1335,7 @@ void SlippiNetplayClient::SendSlippiPad(std::unique_ptr<SlippiPad> pad)
 
 void SlippiNetplayClient::SetMatchSelections(SlippiPlayerSelections &s)
 {
+  std::lock_guard<std::mutex> lock(selectionMutex);
 	matchInfo.localPlayerSelections.Merge(s);
 	matchInfo.localPlayerSelections.playerIdx = playerIdx;
 
@@ -1807,4 +1826,10 @@ SlippiDesyncRecoveryResp SlippiNetplayClient::GetDesyncRecoveryState()
 	}
 
 	return result;
+}
+
+SlippiMatchInfo SlippiNetplayClient::GetMatchInfoSnapshot()
+{
+  std::lock_guard<std::mutex> lock(selectionMutex);
+  return matchInfo;
 }

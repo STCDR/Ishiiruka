@@ -2,6 +2,11 @@ var wshShell = new ActiveXObject("WScript.Shell")
 var oFS = new ActiveXObject("Scripting.FileSystemObject");
 
 var outfile = "./scmrev.h";
+// Source release archives preserve the build's revision header without Git metadata.
+if (!oFS.FolderExists("../../../.git") && !oFS.FileExists("../../../.git") && oFS.FileExists(outfile)) {
+	WScript.Echo("Using source archive revision from " + outfile);
+	WScript.Quit(0);
+}
 var cmd_revision = " rev-parse HEAD";
 var cmd_count = " rev-list --count HEAD ^e1656af8191700f32c18b06d18b9a099d281b95b";
 var cmd_describe = " describe --always --long --dirty";

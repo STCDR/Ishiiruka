@@ -192,6 +192,8 @@ set(SRCS	ActionReplay.cpp
 			PowerPC/JitILCommon/JitILBase_Integer.cpp
 			Slippi/SlippiGameFileLoader.cpp
 			Slippi/SlippiMatchmaking.cpp
+      Slippi/LocalTeamsCoordinator.cpp
+      Slippi/LocalTeamsSelfTest.cpp
 			Slippi/SlippiNetplay.cpp
 			Slippi/SlippiPad.cpp
 			Slippi/SlippiPlayback.cpp

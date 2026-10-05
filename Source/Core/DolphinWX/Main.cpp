@@ -1,3 +1,4 @@
+#include "Core/Slippi/LocalTeamsSelfTest.h"
 // Copyright 2008 Dolphin Emulator Project
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
@@ -39,6 +40,7 @@
 #include "Core/Host.h"
 #include "Core/Movie.h"
 #include "Core/Slippi/SlippiSpectate.h"
+#include "SlippiRustExtensions.h"
 
 #include "Core/GeckoCode.h"
 #include "Core/GeckoCodeConfig.h"
@@ -132,12 +134,35 @@ bool DolphinApp::OnInit()
 #endif
 
 	UICommon::SetUserDirectory(m_user_path.ToStdString());
+#if defined(_WIN32) && !defined(IS_PLAYBACK)
+  // Import before language, settings, adapters and controller profiles are loaded.
+  // Automated/headless runs must never wait for a first-run GUI prompt.
+  if (!m_batch_mode && m_local_teams_test_report.empty()) {
+    const std::string user_directory = File::GetUserPath(D_USER_IDX);
+    if (slprs_launcher_import_available(user_directory.c_str())) {
+      const int answer = wxMessageBox(
+          "Import your Dolphin settings, controller configurations and Slippi account "
+          "from Slippi Launcher?",
+          "Import Slippi settings", wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION);
+      if (!slprs_launcher_import_finish(user_directory.c_str(), answer == wxYES)) {
+        wxMessageBox("The settings could not be imported. Dolphin will continue with "
+                     "the settings in its User folder.",
+                     "Import Slippi settings", wxOK | wxICON_ERROR);
+      }
+    }
+  }
+#endif
 	UICommon::CreateDirectories();
 	// create the version marker file so we know that the user folder is from ishiiruka
 	auto marker_file_path = File::GetUserPath(F_VERSION_IDX);
 	File::WriteStringToFile("", marker_file_path);
 	InitLanguageSupport(); // The language setting is loaded from the user directory
 	UICommon::Init();
+  if (!m_local_teams_test_report.empty()) {
+    const int result = RunLocalTeamsSelfTest(m_local_teams_test_report.ToStdString());
+    UICommon::Shutdown();
+    std::exit(result);
+  }
 
 	if (m_select_video_backend && !m_video_backend_name.empty())
 		SConfig::GetInstance().m_strVideoBackend = WxStrToStr(m_video_backend_name);
@@ -305,6 +330,7 @@ bool DolphinApp::OnInit()
 void DolphinApp::OnInitCmdLine(wxCmdLineParser &parser)
 {
 	static const wxCmdLineEntryDesc desc[] = {
+    {wxCMD_LINE_OPTION, nullptr, "local-teams-self-test", "Run headless localhost network tests; write report to this file", wxCMD_LINE_VAL_STRING, wxCMD_LINE_PARAM_OPTIONAL},
 	    {wxCMD_LINE_SWITCH, "h", "help", "Show this help message", wxCMD_LINE_VAL_NONE, wxCMD_LINE_OPTION_HELP},
 	    {wxCMD_LINE_SWITCH, nullptr, "version", "Show the current app version", wxCMD_LINE_VAL_NONE,
 	     wxCMD_LINE_PARAM_OPTIONAL},
@@ -389,6 +415,7 @@ bool DolphinApp::OnCmdLineParsed(wxCmdLineParser &parser)
 	m_use_debugger = parser.Found("debugger");
 	m_use_logger = parser.Found("logger");
 	m_show_version = parser.Found("version");
+  parser.Found("local-teams-self-test", &m_local_teams_test_report);
 	m_batch_mode = parser.Found("batch");
 	m_confirm_stop = parser.Found("confirm", &m_confirm_setting);
 	m_select_video_backend = parser.Found("video_backend", &m_video_backend_name);

@@ -19,7 +19,7 @@ using json = nlohmann::json;
 class SlippiMatchmaking
 {
   public:
-	SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *user);
+	SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *user, u16 localPort = 0, const SlippiUser::UserInfo* identity = nullptr);
 	~SlippiMatchmaking();
 
 	enum OnlinePlayMode
@@ -80,6 +80,9 @@ class SlippiMatchmaking
 	};
 
 	void FindMatch(MatchSearchSettings settings);
+  void RequestStop(); // Signal every local worker before joining any of them.
+  // Four-client localhost fixture: normal ENet protocol, no matchmaking service.
+  void SetupLocalTeamsLoopback(u8 slot, u16 basePort);
 	void MatchmakeThread();
 	ProcessState GetMatchmakeState();
 	bool IsSearching();
@@ -107,16 +110,22 @@ class SlippiMatchmaking
 	std::default_random_engine generator;
 
 	bool isMmConnected = false;
-	bool isMmTerminated = false;
+	std::atomic<bool> isMmTerminated{false};
 
 	std::thread m_matchmakeThread;
 
 	MatchSearchSettings m_searchSettings;
 
-	ProcessState m_state;
+	std::atomic<ProcessState> m_state{ProcessState::IDLE};
 	std::string m_errorMsg = "";
 
 	SlippiUser *m_user;
+  u16 m_forcedLocalPort = 0;
+  bool m_localTeamsLoopback = false;
+  std::unique_ptr<SlippiUser::UserInfo> m_identity;
+  std::mutex m_errorMutex;
+  void SetError(const std::string& message);
+  SlippiUser::UserInfo GetIdentity();
 
 	int m_isSwapAttempt = false;
 

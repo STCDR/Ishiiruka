@@ -13,6 +13,7 @@
 #include "Core/Slippi/SlippiExiTypes.h"
 #include "Core/Slippi/SlippiGameFileLoader.h"
 #include "Core/Slippi/SlippiMatchmaking.h"
+#include "Core/Slippi/LocalTeamsCoordinator.h"
 #include "Core/Slippi/SlippiNetplay.h"
 #include "Core/Slippi/SlippiReplayComm.h"
 #include "Core/Slippi/SlippiSavestate.h"
@@ -92,6 +93,10 @@ class CEXISlippi : public IEXIDevice
 		CMD_REPORT_SET_COMPLETE = 0xC2,
 		CMD_GET_PLAYER_SETTINGS = 0xC3,
 		CMD_REPORT_MATCH_STATUS_UPDATE = 0xC4,
+    CMD_LOCAL_TEAMS_POLL = LocalTeams::PollCommand,
+    CMD_LOCAL_TEAMS_CONFIRM = LocalTeams::ConfirmCommand,
+    CMD_LOCAL_TEAMS_INPUTS = LocalTeams::InputsCommand,
+    CMD_LOCAL_TEAMS_COUNT = LocalTeams::CountCommand,
 
 		// Misc
 		CMD_LOG_MESSAGE = 0xD0,
@@ -160,6 +165,10 @@ class CEXISlippi : public IEXIDevice
 
 	    // The following are used for Slippi online and also have fixed sizes
 	    {CMD_ONLINE_INPUTS, 25},
+    {CMD_LOCAL_TEAMS_POLL, LocalTeams::PollPayloadSize},
+    {CMD_LOCAL_TEAMS_CONFIRM, LocalTeams::ConfirmPayloadSize},
+    {CMD_LOCAL_TEAMS_INPUTS, LocalTeams::InputsPayloadSize},
+    {CMD_LOCAL_TEAMS_COUNT, LocalTeams::CountPayloadSize},
 	    {CMD_CAPTURE_SAVESTATE, 32},
 	    {CMD_LOAD_SAVESTATE, 32},
 	    {CMD_GET_MATCH_STATE, 0},
@@ -239,7 +248,10 @@ class CEXISlippi : public IEXIDevice
 	u16 getRandomStage();
 	bool isDisconnected();
 	bool isSlippiChatEnabled();
-	void handleOnlineInputs(u8 *payload);
+	void handleOnlineInputs(u8 *payload, const u8* physicalReports = nullptr);
+  void pollLocalTeams(u8* payload);
+  void changeLocalTeamsCount(u8* payload);
+  void confirmLocalTeams(u8* payload);
 	void prepareOpponentInputs(s32 frame, bool shouldSkip);
 	void handleSendInputs(s32 frame, u8 delay, s32 checksumFrame, u32 checksum, u8 *inputs);
 	void handleCaptureSavestate(u8 *payload);
@@ -353,6 +365,8 @@ class CEXISlippi : public IEXIDevice
 	std::unique_ptr<SlippiGameFileLoader> gameFileLoader;
 	std::unique_ptr<SlippiNetplayClient> slippi_netplay;
 	std::unique_ptr<SlippiMatchmaking> matchmaking;
+  std::unique_ptr<LocalTeamsCoordinator> localTeams;
+  bool localTeamsGameInitialized = false;
 	std::unique_ptr<SlippiDirectCodes> directCodes;
 	std::unique_ptr<SlippiDirectCodes> teamsCodes;
 

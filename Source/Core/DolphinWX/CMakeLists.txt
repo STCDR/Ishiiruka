@@ -134,6 +134,7 @@ endif()
 if(wxWidgets_FOUND)
 	add_executable("${DOLPHIN_EXE}" ${SRCS} ${GUI_SRCS})
 	target_link_libraries("${DOLPHIN_EXE}" ${LIBS} ${WXLIBS})
+	target_include_directories("${DOLPHIN_EXE}" PRIVATE ${CMAKE_SOURCE_DIR}/Externals/SlippiRustExtensions/ffi/includes)
 
 	# Link SlippiRustExtensions in.
 	#

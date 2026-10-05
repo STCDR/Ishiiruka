@@ -329,6 +329,8 @@
     <ClCompile Include="Slippi\SlippiPlayback.cpp" />
     <ClCompile Include="Slippi\SlippiTimer.cpp" />
     <ClCompile Include="Slippi\SlippiGameFileLoader.cpp" />
+    <ClCompile Include="Slippi\LocalTeamsCoordinator.cpp" />
+    <ClCompile Include="Slippi\LocalTeamsSelfTest.cpp" />
     <ClCompile Include="Slippi\SlippiMatchmaking.cpp" />
     <ClCompile Include="Slippi\SlippiNetplay.cpp" />
     <ClCompile Include="Slippi\SlippiPad.cpp" />
@@ -534,6 +536,9 @@
     <ClInclude Include="Slippi\SlippiPremadeText.h" />
     <ClInclude Include="Slippi\SlippiTimer.h" />
     <ClInclude Include="Slippi\SlippiGameFileLoader.h" />
+    <ClInclude Include="Slippi\LocalTeamsCoordinator.h" />
+    <ClInclude Include="Slippi\LocalTeamsState.h" />
+    <ClInclude Include="Slippi\LocalTeamsSelfTest.h" />
     <ClInclude Include="Slippi\SlippiMatchmaking.h" />
     <ClInclude Include="Slippi\SlippiNetplay.h" />
     <ClInclude Include="Slippi\SlippiPad.h" />

@@ -47,6 +47,7 @@ private:
 	bool m_use_debugger = false;
 	bool m_use_logger = false;
 	bool m_show_version = false;
+  wxString m_local_teams_test_report;
 	bool m_select_video_backend = false;
 	bool m_select_slippi_input = false;
 	bool m_select_slippi_spectator_port = false;

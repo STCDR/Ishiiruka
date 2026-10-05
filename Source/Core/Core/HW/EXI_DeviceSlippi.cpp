@@ -165,6 +165,7 @@ CEXISlippi::CEXISlippi()
 
 	m_slippiserver = SlippiSpectateServer::getInstance();
 	user = std::make_unique<SlippiUser>(slprs_exi_device_ptr);
+  localTeams = std::make_unique<LocalTeamsCoordinator>(slprs_exi_device_ptr, user.get());
 	g_playbackStatus = std::make_unique<SlippiPlaybackStatus>();
 	matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get());
 	gameFileLoader = std::make_unique<SlippiGameFileLoader>();
@@ -1237,7 +1238,7 @@ bool CEXISlippi::isDisconnected()
 	return status != SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED;
 }
 
-void CEXISlippi::handleOnlineInputs(u8 *payload)
+void CEXISlippi::handleOnlineInputs(u8 *payload, const u8* physicalReports)
 {
 	m_read_queue.clear();
 
@@ -1247,7 +1248,7 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 	u8 delay = payload[12];
 	u8 *inputs = &payload[13];
 
-	if (frame == 1)
+	if (frame == 1 && (!localTeams->Active() || !localTeamsGameInitialized))
 	{
 		availableSavestates.clear();
 		activeSavestates.clear();
@@ -1281,6 +1282,7 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 		localSelections.Reset();
 		if (slippi_netplay)
 			slippi_netplay->StartSlippiGame();
+    if (localTeams->Active()) { localTeams->StartGame(); localTeamsGameInitialized = true; }
 	}
 
 	if (isDisconnected())
@@ -1306,6 +1308,11 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
 	slippi_netplay->DropOldRemoteInputs(finalizedFrame);
 
 	bool shouldSkip = shouldSkipOnlineFrame(frame, finalizedFrame);
+  if (localTeams->Active())
+  {
+    if (!physicalReports) { m_read_queue.push_back(3); return; }
+    localTeams->SendInputs(frame, delay, finalizedFrame, finalizedFrameChecksum, physicalReports, shouldSkip);
+  }
 	if (shouldSkip)
 	{
 		// Send inputs that have not yet been acked
@@ -1985,7 +1992,12 @@ void CEXISlippi::startFindMatch(u8 *payload)
 		isEnetInitialized = true;
 	}
 
-	matchmaking->FindMatch(search);
+  if (localTeams->Active() && search.mode == SlippiMatchmaking::TEAMS)
+  {
+    localTeams->SetSearchCode(search.connectCode);
+    localTeams->BeginSearch(matchmaking);
+  }
+  else matchmaking->FindMatch(search);
 #endif
 }
 
@@ -2135,7 +2147,14 @@ void CEXISlippi::prepareOnlineMatchState()
 	m_read_queue.clear();
 
 	auto errorState = SlippiMatchmaking::ProcessState::ERROR_ENCOUNTERED;
-	SlippiMatchmaking::ProcessState mmState = !forcedError.empty() ? errorState : matchmaking->GetMatchmakeState();
+	SlippiMatchmaking::ProcessState mmState = !forcedError.empty() ? errorState : localTeams->Tick(*matchmaking, slippi_netplay.get());
+  if (localTeams->Active() && localTeams->LobbyDisconnected())
+  {
+    handleConnectionCleanup();
+    prepareOnlineMatchState();
+    return;
+  }
+  if (localTeams->Active() && !localTeams->Error().empty()) forcedError = localTeams->Error();
 
 #ifdef LOCAL_TESTING
 	if (localSelections.isCharacterSelected || isLocalConnected)
@@ -2147,7 +2166,7 @@ void CEXISlippi::prepareOnlineMatchState()
 
 	m_read_queue.push_back(mmState); // Matchmaking State
 
-	u8 localPlayerReady = localSelections.isCharacterSelected;
+	u8 localPlayerReady = localTeams->Active() ? localTeams->state.AllConfirmed() : localSelections.isCharacterSelected;
 	u8 remotePlayersReady = 0;
 
 	auto userInfo = user->GetUserInfo();
@@ -2187,8 +2206,16 @@ void CEXISlippi::prepareOnlineMatchState()
 			}
 
 			stagePool.clear(); // Clear stage pool so that when we call getRandomStage it will use full list
-			localSelections.stageId = getRandomStage();
-			slippi_netplay->SetMatchSelections(localSelections);
+			if (localTeams->Active())
+      {
+        localSelections = localTeams->PrimarySelection();
+        localTeams->PublishSelections(*slippi_netplay);
+      }
+      else
+      {
+        localSelections.stageId = getRandomStage();
+        slippi_netplay->SetMatchSelections(localSelections);
+      }
 		}
 
 #ifdef LOCAL_TESTING
@@ -2208,7 +2235,8 @@ void CEXISlippi::prepareOnlineMatchState()
 
 		if (isConnected)
 		{
-			auto matchInfo = slippi_netplay->GetMatchInfo();
+			auto matchInfoSnapshot = slippi_netplay->GetMatchInfoSnapshot();
+    auto matchInfo = &matchInfoSnapshot;
 			remotePlayersReady = 1;
 #ifndef LOCAL_TESTING
 			u8 remotePlayerCount = matchmaking->RemotePlayerCount();
@@ -2293,7 +2321,8 @@ void CEXISlippi::prepareOnlineMatchState()
 		return;
 	}
 
-	m_read_queue.push_back(localPlayerReady);   // Local player ready
+	if (localTeams->Active() && slippi_netplay && !localTeams->AllReady(*slippi_netplay)) remotePlayersReady = 0;
+  m_read_queue.push_back(localPlayerReady);   // Local player ready
 	m_read_queue.push_back(remotePlayersReady); // Remote players ready
 	m_read_queue.push_back(localPlayerIndex);   // Local player index
 	m_read_queue.push_back(remotePlayerIndex);  // Remote player index
@@ -2337,7 +2366,8 @@ void CEXISlippi::prepareOnlineMatchState()
 	{
 		auto isDecider = slippi_netplay->IsDecider();
 		u8 remotePlayerCount = matchmaking->RemotePlayerCount();
-		auto matchInfo = slippi_netplay->GetMatchInfo();
+		auto matchInfoSnapshot = slippi_netplay->GetMatchInfoSnapshot();
+    auto matchInfo = &matchInfoSnapshot;
 		SlippiPlayerSelections lps = matchInfo->localPlayerSelections;
 		auto rps = matchInfo->remotePlayerSelections;
 
@@ -3059,9 +3089,20 @@ void CEXISlippi::handleConnectionCleanup()
 {
 	ERROR_LOG(SLIPPI_ONLINE, "Connection cleanup started...");
 
-	// Handle destructors in a separate thread to not block the main thread
-	std::thread cleanup(doConnectionCleanup, std::move(matchmaking), std::move(slippi_netplay));
-	cleanup.detach();
+	if (localTeams->Active())
+  {
+    if (matchmaking) matchmaking->RequestStop();
+    if (slippi_netplay) slippi_netplay->RequestStop();
+    localTeams->Cleanup();
+    matchmaking.reset();
+    slippi_netplay.reset();
+  }
+  else
+  {
+    std::thread cleanup(doConnectionCleanup, std::move(matchmaking), std::move(slippi_netplay));
+    cleanup.detach();
+  }
+  localTeamsGameInitialized = false;
 
 	// Reset matchmaking
 	matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get());
@@ -3102,6 +3143,7 @@ void CEXISlippi::prepareNewSeed()
 
 void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
 {
+  if (localTeams->Active() && localTeams->Loopback()) return;
 	std::string matchId = recentMmResult.id;
 	SlippiMatchmakingOnlinePlayMode onlineMode = static_cast<SlippiMatchmakingOnlinePlayMode>(query.onlineMode);
 	u32 durationFrames = query.frameLength;
@@ -3423,6 +3465,12 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 		}
 
 		u32 payloadLen = payloadSizes[byte];
+    if (byte >= CMD_LOCAL_TEAMS_POLL && byte <= CMD_LOCAL_TEAMS_COUNT && payloadLen + 1 > _uSize - bufLoc)
+    {
+      ERROR_LOG(SLIPPI, "Truncated local teams command: 0x%X", byte);
+      m_read_queue.clear();
+      return;
+    }
 		switch (byte)
 		{
 		case CMD_RECEIVE_GAME_END:
@@ -3454,7 +3502,19 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
 			m_read_queue.clear();
 			m_read_queue.insert(m_read_queue.begin(), geckoList.begin(), geckoList.end());
 			break;
-		case CMD_ONLINE_INPUTS:
+		case CMD_LOCAL_TEAMS_POLL:
+      pollLocalTeams(&memPtr[bufLoc + 1]);
+      break;
+    case CMD_LOCAL_TEAMS_CONFIRM:
+      confirmLocalTeams(&memPtr[bufLoc + 1]);
+      break;
+    case CMD_LOCAL_TEAMS_INPUTS:
+      handleOnlineInputs(&memPtr[bufLoc + 1], &memPtr[bufLoc + 26]);
+      break;
+    case CMD_LOCAL_TEAMS_COUNT:
+      changeLocalTeamsCount(&memPtr[bufLoc + 1]);
+      break;
+    case CMD_ONLINE_INPUTS:
 			handleOnlineInputs(&memPtr[bufLoc + 1]);
 			break;
 		case CMD_CAPTURE_SAVESTATE:
@@ -3642,3 +3702,43 @@ bool CEXISlippi::IsPresent() const
 }
 
 void CEXISlippi::TransferByte(u8 &byte) {}
+
+void CEXISlippi::pollLocalTeams(u8* payload)
+{
+  const auto status = localTeams->Poll(payload[0], payload + 1);
+  if (localTeams->Active() && localTeams->state.phase == LocalTeams::Phase::Selecting)
+    localTeamsGameInitialized = false;
+  m_read_queue.assign(status.begin(), status.end());
+}
+void CEXISlippi::confirmLocalTeams(u8* payload)
+{
+  if (!localTeams->Confirm(payload, generator() % 0xFFFF)) return;
+  if (!localTeams->state.AllConfirmed()) return;
+  localSelections = localTeams->PrimarySelection();
+  if (slippi_netplay)
+  {
+    localTeams->PublishSelections(*slippi_netplay);
+    return;
+  }
+  // Normal tests and online play wait for Slippi's native code-entry callback,
+  // which arrives through CMD_FIND_OPPONENT and starts the entire local group.
+  if (!localTeams->Loopback()) return;
+  if (!isEnetInitialized)
+  {
+    if (enet_initialize() < 0) { forcedError = "Could not initialize ENet"; return; }
+    isEnetInitialized = true;
+  }
+  lastSearch.mode = SlippiMatchmaking::TEAMS;
+  lastSearch.connectCode = localTeams->SearchCode();
+  localTeams->BeginSearch(matchmaking);
+}
+
+void CEXISlippi::changeLocalTeamsCount(u8* payload)
+{
+  // Reject even a stale UI request while primary networking is still active.
+  if (!slippi_netplay && matchmaking->GetMatchmakeState() == SlippiMatchmaking::IDLE &&
+      localTeams->ChangeCount(payload)) localTeamsGameInitialized = false;
+  const u8 buttons[8] = {};
+  const auto status = localTeams->Poll(SlippiMatchmaking::TEAMS | 0x80, buttons);
+  m_read_queue.assign(status.begin(), status.end());
+}
