@@ -1,4 +1,4 @@
-## Slippi Dolphin: Matchmaking Teams with multiple local players
+# Slippi Dolphin: Matchmaking Teams with multiple local players
 
 
 **[Download the Windows ZIP](https://github.com/STCDR/Ishiiruka/releases)**, extract it and run `Slippi Dolphin.exe`.
