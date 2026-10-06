@@ -5,9 +5,8 @@
 
 First launch offers to import your Slippi Launcher Dolphin settings, controllers and account if this profile is still untouched.
 
-Enter Teams with any controller. Other controllers can **hold Start to join**, or claim an empty card by moving a stick or pressing a button. **Hold B** to leave; the controller that entered Teams returns everyone to the menu.
+Move the main controller’s cursor into the top-left corner and press A to cycle between 1–4 local players. An unused controller can claim an empty card by moving a stick or pressing a button, or hold Start to add a player-card and join. Each player, then presses Start to ready up. Once everyone is ready, enter your usual Teams room code to start searching.
 
-You can also use the main controller's cursor in the **top-left grey corner** and press **A** to cycle **1-4 local players**. Everyone picks a character/team and presses **Start**, then enter your usual Teams room code.
 
 ![Change the local player count in Teams](docs/assets/local-player-toggle.gif)
 
