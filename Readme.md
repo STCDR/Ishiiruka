@@ -5,7 +5,7 @@
 
 First launch offers to import your Slippi Launcher Dolphin settings, controllers and account if this profile is still untouched.
 
-Unused controllers can hold Start to add a player-card and join. Alternatively move the main controller's cursor to the top-left corner and press A to cycle between 1–4 local players, then any unused controller can claim the new empty player-card by moving the stick or pressing a button.
+Unused controllers can hold Start to join the CSS. Alternatively move the main controller's cursor to the top-left corner and press A to cycle between 1–4 local players, then any unused controller can claim the new empty player-card by moving the stick or pressing a button.
 Once everyone has picked and pressed Start to ready up, enter your usual Teams room code to search for a game.
 
 
