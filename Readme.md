@@ -16,4 +16,6 @@ In Teams CSS, move P1's cursor into the **top-left grey corner** and press **A**
 
 
 
+Source: [Dolphin](https://github.com/STCDR/Ishiiruka), [Rust](https://github.com/STCDR/slippi-rust-extensions), [ASM](https://github.com/STCDR/slippi-ssbm-asm). [Windows build instructions](docs/LOCAL-TEAMS-BUILD.md).
+
 **Disclaimer**: Portions of the codebase have been generated with the assistance of AI, including code snippets, functions, classes, structs, methods, and files. AI assistance may also have been used to produce comments, docstrings, type signatures, and project documentation.
