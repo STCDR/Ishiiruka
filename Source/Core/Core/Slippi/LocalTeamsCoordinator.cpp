@@ -30,7 +30,7 @@ LocalTeamsCoordinator::LocalTeamsCoordinator(uintptr_t device_, SlippiUser* user
                   (loopback && state.count != 4)))
   {
     enabled = false;
-    OSD::AddMessage("Local teams disabled: check local-teams.ini (1-4 players, first controller 1, distinct ports)", 15000, OSD::Color::RED);
+    OSD::AddMessage("Local teams disabled: check local-teams.ini (1-4 players, distinct controller ports)", 15000, OSD::Color::RED);
   }
 }
 
@@ -71,11 +71,18 @@ void LocalTeamsCoordinator::ShowStatus()
   }
 }
 
-std::array<u8, LocalTeams::StatusSize> LocalTeamsCoordinator::Poll(u8 mode, const u8* buttonBytes)
+std::array<u8, LocalTeams::StatusSize> LocalTeamsCoordinator::Poll(u8 mode, const u8* buttonBytes, const u8* reports, unsigned enteringPort, u32 frame)
 {
-  active = (mode & 0x3F) == SlippiMatchmaking::TEAMS;
+  active = (mode & 0x1F) == SlippiMatchmaking::TEAMS;
   std::array<u8, LocalTeams::StatusSize> result{};
   if (!Active()) return result;
+  if ((mode & 0x20) && NativeCSS())
+  {
+    // The same session-reset command binds an entering port or, with port 4,
+    // clears cards on a real mode exit. Connection cancellation retains picks.
+    if (enteringPort == 4) state.ClearCards();
+    else if (!validated) state.BeginJoining(enteringPort);
+  }
   const bool returnedFromGame = state.phase == LocalTeams::Phase::InGame;
   std::array<std::uint16_t, 4> buttons{};
   for (unsigned i = 0; i < 4; ++i) buttons[i] = (u16(buttonBytes[2 * i]) << 8) | buttonBytes[2 * i + 1];
@@ -86,12 +93,13 @@ std::array<u8, LocalTeams::StatusSize> LocalTeamsCoordinator::Poll(u8 mode, cons
     state.startArmed = false;
     state.nativeArmed = state.nativeHeld = 0;
   }
-  else if (!(mode & 0x80))
+  else if (!(mode & 0xA0))
   {
+    state.PollJoining(reports, frame, !validated);
     state.Poll(buttons);
     if (NativeCSS() && state.phase == LocalTeams::Phase::Selecting)
       for (unsigned i = 0; i < state.count; ++i)
-        if (buttons[state.ports[i]] & 0x200) state.UnreadyPlayer(i);
+        if (state.InputEnabled(i) && (buttons[state.ports[i]] & 0x200)) state.UnreadyPlayer(i);
     if (returnedFromGame) published = false;
   }
   result = {{1, u8(state.count), u8(state.active), u8(state.ports[state.active]), u8(state.confirmed),
@@ -105,6 +113,9 @@ std::array<u8, LocalTeams::StatusSize> LocalTeamsCoordinator::Poll(u8 mode, cons
     result[18 + 4*i] = state.selections[i].team;
     result[19 + 4*i] = u8((state.saved >> i) & 1);
   }
+  result[32] = u8(state.JoinedMask());
+  result[33] = u8(state.SuppressedMask());
+  result[34] = u8(state.rosterCount); result[35] = u8(state.rosterAction);
   state.clearToken = false;
   ShowStatus();
   return result;
@@ -130,9 +141,23 @@ bool LocalTeamsCoordinator::ChangeCount(const u8* payload)
 {
   // A connected rematch also uses Selecting: validated guards its live roster.
   const unsigned previous = state.count;
-  if (!Active() || !NativeCSS() || validated || !state.Resize(payload[0])) return false;
+  if (!Active() || !NativeCSS()) return false;
+  const unsigned action = state.rosterAction;
+  if (action == 0x40 && payload[0] == 0 && state.phase != LocalTeams::Phase::InGame)
+  {
+    // Leaving the mode is allowed while searching/connected. Scene teardown
+    // still owns cancelling all the local clients; roster changes stay gated.
+    state.ClearCards(); state.count = 1; state.joined = 0; state.ports.fill(4);
+    published = false;
+    ShowStatus();
+    return true;
+  }
+  if (validated || state.phase != LocalTeams::Phase::Selecting) return false;
+  if (action && payload[0] != state.rosterCount) return false;
+  if (!action && !state.Resize(payload[0])) return false;
   for (unsigned i = 0; i < previous; ++i)
   {
+    if (state.joining && !state.Claimed(i)) continue;
     const u8* pick = payload + 1 + 4 * i;
     if (pick[3] && pick[0] < 26 && pick[2] <= 2)
     {
@@ -142,6 +167,15 @@ bool LocalTeamsCoordinator::ChangeCount(const u8* payload)
       state.saved |= 1u << i;
     }
     else state.saved &= ~(1u << i);
+  }
+  if (action & 0x80)
+  {
+    if (!state.Resize(payload[0])) return false;
+    state.ClaimAddedPort(action & 3);
+  }
+  else if (action & 0x40)
+  {
+    state.RemovePlayer(action & 3);
   }
   published = false;
   ShowStatus();

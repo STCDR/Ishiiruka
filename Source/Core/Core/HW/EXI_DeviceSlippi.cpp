@@ -3705,7 +3705,7 @@ void CEXISlippi::TransferByte(u8 &byte) {}
 
 void CEXISlippi::pollLocalTeams(u8* payload)
 {
-  const auto status = localTeams->Poll(payload[0], payload + 1);
+  const auto status = localTeams->Poll(payload[0], payload + 1, payload + 10, payload[9], Common::swap32(payload + 58));
   if (localTeams->Active() && localTeams->state.phase == LocalTeams::Phase::Selecting)
     localTeamsGameInitialized = false;
   m_read_queue.assign(status.begin(), status.end());

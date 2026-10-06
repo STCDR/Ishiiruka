@@ -10,7 +10,7 @@ public:
   LocalTeamsCoordinator(uintptr_t device, SlippiUser* user);
   bool Active() const { return enabled && active; }
   LocalTeams::State state;
-  std::array<u8, LocalTeams::StatusSize> Poll(u8 mode, const u8* buttons);
+  std::array<u8, LocalTeams::StatusSize> Poll(u8 mode, const u8* buttons, const u8* reports = nullptr, unsigned enteringPort = 4, u32 frame = 0);
   bool Confirm(const u8* payload, u32 rng);
   bool ChangeCount(const u8* payload);
   bool BeginSearch(std::unique_ptr<SlippiMatchmaking>& primary);

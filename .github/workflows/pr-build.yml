@@ -11,6 +11,7 @@ on:
 jobs:
 
   skip_duplicates:
+    if: ${{ github.repository == 'project-slippi/Ishiiruka' }}
     name: Skip Duplicate Runs
     runs-on: ubuntu-latest
     outputs:

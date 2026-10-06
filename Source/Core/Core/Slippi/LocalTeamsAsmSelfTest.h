@@ -114,6 +114,8 @@ struct Runner
   {
     const u8 status[9] = {1, u8(count), u8(active), u8(active), 0, u8(phase), 1, 0, u8(loopback)};
     Memory::CopyToEmu(Css + elf.Symbol("CSSDT_LOCAL_TEAMS_STATUS"), status, sizeof(status));
+    for(unsigned i=0;i<4;++i) Memory::Write_U8(u8(i),Css+elf.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+12+i);
+    Memory::Write_U8(u8((1u<<count)-1),Css+elf.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+32);
     PowerPC::ppcState.gpr[7] = 0x1000;
   }
   u32 Run(u32 entry, const std::vector<u32>& stops)
@@ -162,6 +164,10 @@ struct Runner
         Memory::CopyToEmu(cpu.gpr[3], bytes.data(), bytes.size());
       }
       else if (cpu.pc == elf.Symbol("Inputs_GetPlayerHeldInputs")) { cpu.gpr[4]=0; }
+      else if (cpu.pc == elf.Symbol("JObj_SetFlagsAll"))
+        Memory::Write_U32(Memory::Read_U32(cpu.gpr[3]+0x14)|cpu.gpr[4],cpu.gpr[3]+0x14);
+      else if (cpu.pc == elf.Symbol("JObj_ClearFlagsAll"))
+        Memory::Write_U32(Memory::Read_U32(cpu.gpr[3]+0x14)&~cpu.gpr[4],cpu.gpr[3]+0x14);
       else if (cpu.pc != elf.Symbol("HSD_Free") && cpu.pc != elf.Symbol("SFX_Menu_CommonSound") && cpu.pc != 0x801BAAD0)
         stub = false;
       if (stub) { cpu.pc = cpu.spr[SPR_LR]; continue; }
@@ -315,6 +321,15 @@ void Run(const std::string& directory, std::ofstream& report)
         Memory::Write_U8(1,Runner::Css+scene.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+9);
         Memory::Write_U8(2,requestInScene?Runner::SceneData+3:Runner::R13-0x49AA);
         Memory::Write_U8(u8((1u<<selected)-1),Runner::Css+scene.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+4);
+        for(unsigned player=0;player<4;++player)
+        {
+          Memory::Write_U8(u8(player+1),Runner::SceneData+0x70+36*player);
+          Memory::Write_U8(3,Runner::SceneData+0x73+36*player);
+          Memory::Write_U8(2,Runner::SceneData+0x79+36*player);
+          const u32 door=0x803F0DFC+36*player;
+          Memory::Write_U8(1,door+9); Memory::Write_U8(2,door+0x0a);
+          Memory::Write_U8(3,door+0x0d); Memory::Write_U8(u8(player+1),door+0x0e); Memory::Write_U8(u8(player+1),door+0x0f);
+        }
         const u32 retailMajor[]={0x3C808048,0x38849D30,0x98640001,0x38000001,0x9804000C,0x4E800020};
         for(unsigned i=0;i<6;++i) Memory::Write_U32(retailMajor[i],0x801A42F8+4*i);
         back.extraCodeRanges={{0x801A42F8,0x801A4310}};
@@ -322,8 +337,19 @@ void Run(const std::string& directory, std::ofstream& report)
         PowerPC::ppcState.gpr[3]=Runner::Minor;
         Require(back.Run(scene.Symbol("CSSSceneDecide"),{scene.Symbol("SplashSceneInit"),Runner::Return})==Runner::Return &&
                 Memory::Read_U8(0x80479D31)==1 && Memory::Read_U8(0x80479D3C)==1 &&
-                back.packets.size()==1 && back.packets[0]==std::vector<u8>{u8(scene.Symbol("CONST_SlippiCmdCleanupConnections"))},
+                back.packets.size()==2 && back.packets[0].size()==LocalTeams::PollPayloadSize+1 &&
+                back.packets[0][0]==0xc5 && back.packets[0][1]==0x23 && back.packets[0][10]==4 &&
+                back.packets[1]==std::vector<u8>{u8(scene.Symbol("CONST_SlippiCmdCleanupConnections"))},
                 "native Back advanced to stage select or failed to return to menu/close local clients");
+        for(unsigned player=0;player<4;++player)
+        {
+          const u32 door=0x803F0DFC+36*player;
+          Require(Memory::Read_U8(Runner::SceneData+0x70+36*player)==26 &&
+                  Memory::Read_U8(Runner::SceneData+0x73+36*player)==0 && Memory::Read_U8(Runner::SceneData+0x79+36*player)==0 &&
+                  Memory::Read_U8(door+9)==0 && Memory::Read_U8(door+0x0a)==0 && Memory::Read_U8(door+0x0d)==0 &&
+                  Memory::Read_U8(door+0x0e)==25 && Memory::Read_U8(door+0x0f)==25,
+                  "mode exit retained a native card's character, costume or team");
+        }
       }
     for(unsigned localReady : {0u,1u}) for(unsigned remoteReady : {0u,1u})
     {
@@ -457,6 +483,7 @@ void Run(const std::string& directory, std::ofstream& report)
       pads.pollResponse.assign(LocalTeams::StatusSize, 0);
       pads.pollResponse[0]=1; pads.pollResponse[1]=2; pads.pollResponse[9]=1;
       pads.pollResponse[10]=3; pads.pollResponse[11]=3; pads.pollResponse[12]=0; pads.pollResponse[13]=2;
+      pads.pollResponse[32]=3;
       const auto raw = Runner::Stack + input.Symbol("P1_PAD_OFFSET");
       const u8 values[48] = {0x11,0,12,13,14,15,16,17,0,0,0,0, 2,0,22,23,24,25,26,27,0,0,0,0,
                             0x10,0x10,32,33,34,35,36,37,0,0,0,0, 1,0,42,43,44,45,46,47,0,0,0,0};
@@ -465,7 +492,7 @@ void Run(const std::string& directory, std::ofstream& report)
       Require(Memory::Read_U16(raw) == 0x100 && Memory::Read_U8(raw+2)==12 &&
               Memory::Read_U16(raw+12)==0x10 && Memory::Read_U8(raw+14)==32, "native CSS remapped pads incorrectly or let stock VS consume Start");
       Require(Memory::Read_U8(raw+34)==0xFF && Memory::Read_U8(raw+46)==0xFF, "native CSS enabled unused physical controllers");
-      Require(pads.packets.size()==1 && pads.packets[0].size()==10 && pads.packets[0][6]==0x10 && pads.packets[0][7]==0x10,
+      Require(pads.packets.size()==1 && pads.packets[0].size()==LocalTeams::PollPayloadSize+1 && pads.packets[0][6]==0x10 && pads.packets[0][7]==0x10,
               "native CSS lost raw Start before coordinator polling");
     }
     for (unsigned phase : {0u,1u,2u,5u})
@@ -475,6 +502,7 @@ void Run(const std::string& directory, std::ofstream& report)
       moving.pollResponse[0]=1; moving.pollResponse[1]=2; moving.pollResponse[4]=phase==0?1:3;
       moving.pollResponse[5]=u8(phase); moving.pollResponse[9]=1;
       moving.pollResponse[12]=0; moving.pollResponse[13]=2;
+      moving.pollResponse[32]=3;
       const auto raw=Runner::Stack+input.Symbol("P1_PAD_OFFSET");
       u8 values[48]={};
       values[0]=0x11; values[2]=55; values[3]=66;
@@ -488,6 +516,62 @@ void Run(const std::string& directory, std::ofstream& report)
               "locked character controls leaked or unready player's controls were blocked");
     }
     report << "PASS: both cursors retain stick movement after ready, code entry, searching and connecting\n";
+    for(unsigned primary=0;primary<4;++primary)
+    {
+      Runner blocked(input); blocked.Status(2,0);
+      blocked.pollResponse.assign(LocalTeams::StatusSize,0);
+      blocked.pollResponse[0]=blocked.pollResponse[9]=1; blocked.pollResponse[1]=2;
+      blocked.pollResponse[12]=u8(primary); blocked.pollResponse[13]=4; blocked.pollResponse[32]=1;
+      const auto raw=Runner::Stack+input.Symbol("P1_PAD_OFFSET");
+      u8 values[48]={};
+      for(unsigned i=0;i<4;++i) { values[12*i]=0x1f; values[12*i+1]=0x7f; values[12*i+2]=u8(10+i); }
+      Memory::CopyToEmu(raw,values,sizeof(values));
+      blocked.Run(Elf::Base,{Elf::Base+u32(input.text.size())});
+      Require(Memory::Read_U8(raw+2)==10+primary,"entering controller failed to own card one");
+      for(unsigned i=1;i<4;++i) Require(Memory::Read_U16(raw+12*i)==0 && Memory::Read_U8(raw+12*i+2)==0 && Memory::Read_U8(raw+12*i+10)==(i==1?0:0xff),
+                                      "unclaimed controller affected CSS input");
+      blocked.pollResponse[32]=3; blocked.pollResponse[13]=u8((primary+1)%4); blocked.pollResponse[33]=2;
+      Memory::CopyToEmu(raw,values,sizeof(values)); PowerPC::ppcState.spr[SPR_LR]=Runner::Return;
+      blocked.Run(Elf::Base,{Elf::Base+u32(input.text.size())});
+      Require(Memory::Read_U16(raw+12)==0 && Memory::Read_U8(raw+14)==10+(primary+1)%4 && Memory::Read_U8(raw+22)==0,"joining buttons leaked or held stick movement did not immediately reach the claimed cursor");
+    }
+    report << "PASS: every primary adapter port owns card one; unclaimed controls stay masked, claimed movement works immediately while joining buttons remain consumed\n";
+    Elf menuEnter(directory+"menu-enter.elf"), gameInit(directory+"game-init.elf"), cursorPort(directory+"cursor-port.elf"), tokenPort(directory+"token-port.elf");
+    for(unsigned primary=0;primary<4;++primary)
+    {
+      Runner enter(menuEnter); Memory::Write_U8(u8(primary),Runner::R13-0x5108);
+      enter.pollResponse.assign(LocalTeams::StatusSize,0);
+      enter.Run(menuEnter.Symbol("FN_LOCAL_TEAMS_ENTER"),{Runner::Return});
+      Require(enter.packets.size()==1 && enter.packets[0].size()==LocalTeams::PollPayloadSize+1 && enter.packets[0][1]==0x23 && enter.packets[0][10]==primary,
+              "mode entry did not transmit the actual entering controller");
+      Runner game(gameInit); game.Status(2,0);
+      Memory::Write_U8(1,Runner::Css+gameInit.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+9);
+      Memory::Write_U8(u8(primary),Runner::Css+gameInit.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+12);
+      Memory::Write_U8(0,Runner::R13-0x5108);
+      PowerPC::ppcState.gpr[27]=Runner::Buffer; // this section uses r27; later routines redefine the alias
+      game.Run(gameInit.Symbol("LOCAL_TEAMS_SELECT_SOURCE"),{gameInit.Symbol("LOCAL_TEAMS_SOURCE_SET")});
+      Require(Memory::Read_U8(Runner::Buffer+gameInit.Symbol("ODB_INPUT_SOURCE_INDEX"))==primary,
+              "gameplay switched the primary input back to adapter port one");
+      Runner token(tokenPort); token.Status(2,0);
+      Memory::Write_U8(1,Runner::Css+tokenPort.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+9);
+      Memory::Write_U8(u8(primary),Runner::Css+tokenPort.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+13);
+      PowerPC::ppcState.gpr[29]=Runner::Buffer; Memory::Write_U8(1,Runner::Buffer+4);
+      token.Run(Elf::Base,{Elf::Base+u32(tokenPort.text.size())});
+      Require(PowerPC::ppcState.gpr[4]==primary && Memory::Read_U8(Runner::Buffer+4)==1,"token label changed card ownership or lost its adapter port");
+      for(unsigned team=0;team<3;++team)
+      {
+        Runner cursor(cursorPort); cursor.Status(2,0);
+        Memory::Write_U8(1,Runner::Css+cursorPort.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+9);
+        Memory::Write_U8(u8(primary),Runner::Css+cursorPort.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+13);
+        PowerPC::ppcState.gpr[31]=Runner::Buffer; Memory::Write_U8(1,Runner::Buffer+4);
+        rPS0(1)=double(4+team);
+        unsigned requested=99;
+        cursor.services[cursorPort.Symbol("FN_IntToFloat")]=[&]{ requested=PowerPC::ppcState.gpr[3]; rPS0(1)=double(requested); };
+        cursor.Run(Elf::Base,{Elf::Base+u32(cursorPort.text.size())});
+        Require(requested==4*primary+team && PowerPC::ppcState.gpr[31]==Runner::Buffer,"hand label lost its real port/team or card pointer");
+      }
+    }
+    report << "PASS: all four mode-entry/gameplay source ports and real hand/token port labels, preserving card ownership and team colors\n";
     for (bool own : {false, true})
     {
       Runner team(nativeTeam); team.Status(2,0);
@@ -502,8 +586,10 @@ void Run(const std::string& directory, std::ofstream& report)
     auto writeFloat = [](float value, u32 address) { u32 bits; std::memcpy(&bits,&value,4); Memory::Write_U32(bits,address); };
     auto readFloat = [](u32 address) { const auto bits=Memory::Read_U32(address); float value; std::memcpy(&value,&bits,4); return value; };
     for(unsigned count : {1u,2u,3u,4u})
+    for(bool waiting : {false,true})
     {
       Runner init(nativeInit); init.Status(count,0);
+      if(waiting) Memory::Write_U8(1,Runner::Css+nativeInit.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+32);
       Memory::Write_U8(1, Runner::Css + nativeInit.Symbol("CSSDT_LOCAL_TEAMS_STATUS") + 9);
       Memory::Write_U32(Runner::Buffer,Runner::R13-0x49C8);
       Memory::Write_U32(0x81207000,Runner::Buffer+0x60);
@@ -548,8 +634,10 @@ void Run(const std::string& directory, std::ofstream& report)
       Require(Memory::Read_U8(Runner::Css+nativeInit.Symbol("CSSDT_NATIVE_VISIBLE_COUNT"))==count,
               "new CSS did not commit its matching visible player count");
       for(unsigned player=0;player<4;++player)
-        Require((Memory::Read_U32(0x81200080+player*0x100+0x14)==0x10)==(player>=count),
-                "native CSS cursor visibility did not match the chosen count");
+        Require((Memory::Read_U32(0x81200080+player*0x100+0x14)==0x10)==(player>=count || (waiting && player>0)),
+                "native CSS cursor visibility did not match claimed cards");
+      for(unsigned player=0;player<count;++player)
+        Require(Memory::Read_U8(0x81203000+player*0x100+7)==40,"first visible token can retain the wrong adapter-port label");
       const float shift=count==1?0:count==2?-2.6f:count==3?6.4f:9.4f;
       if(count>=2) Require(std::abs(readFloat(0x803F0DFC+36+0x1C)-(-11.4f-shift))<0.001f,
                           "overlapping panel's team hitbox did not move with its marker");
@@ -631,6 +719,31 @@ void Run(const std::string& directory, std::ofstream& report)
     }
     report << "PASS: all 1-4 native layouts, descending panel overlap, hidden names/10-Man heading, stock hyphen/P/ring retained with matching digit, own-marker cursor spawns and Back preserved\n";
     report << "PASS: two/three/four-player right margins match; backend roster changes keep old portrait spacing/fields until CSS initialization\n";
+    for(unsigned joined : {1u,3u,7u,15u})
+    {
+      Runner visibility(nativeDraw); visibility.Status(4,0);
+      Memory::Write_U8(1,Runner::Css+nativeDraw.Symbol("CSSDT_NATIVE_INITIALIZED"));
+      Memory::Write_U8(4,Runner::Css+nativeDraw.Symbol("CSSDT_NATIVE_VISIBLE_COUNT"));
+      Memory::Write_U8(u8(joined),Runner::Css+nativeDraw.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+32);
+      for(unsigned i=0;i<4;++i)
+      {
+        const u32 hand=0x81200000+i*0x100, token=0x81203000+i*0x100;
+        Memory::Write_U32(hand,0x804A0BC0+4*i); Memory::Write_U32(token,0x804A0BD0+4*i);
+        Memory::Write_U32(hand+0x40,hand); Memory::Write_U32(token+0x40,token);
+        Memory::Write_U32(hand+0x80,hand+0x40+0x28); Memory::Write_U32(token+0x80,token+0x40+0x28);
+        Memory::Write_U32(0x50,hand+0x80+0x14); Memory::Write_U32(0x40,token+0x80+0x14);
+        Memory::Write_U8(u8(i),hand+4); writeFloat(float(i),hand+0x0c);
+      }
+      visibility.Run(nativeDraw.Symbol("DRAW_CALLBACK")+4,{nativeDraw.Symbol("NATIVE_CURSOR_VISIBILITY_DONE")});
+      for(unsigned i=0;i<4;++i)
+      {
+        const bool claimed=(joined & (1u<<i))!=0;
+        Require(Memory::Read_U32(0x81200080+i*0x100+0x14)==(claimed?0x40u:0x50u),"unclaimed hand visible or claimed hand failed to reveal");
+        Require(Memory::Read_U32(0x81203080+i*0x100+0x14)==(claimed?0x40u:0x50u),"unclaimed token visible or another render flag changed");
+        Require(Memory::Read_U8(0x81200000+i*0x100+4)==i && readFloat(0x81200000+i*0x100+0x0c)==float(i),"claim visibility changed cursor ownership or position");
+      }
+    }
+    report << "PASS: claiming reveals prepared hands without a CSS reload; unclaimed hands and tokens stay hidden without moving existing cursors\n";
     Elf text(directory+"text.elf"), hideRules(directory+"hide-rules.elf"), disableRules(directory+"disable-rules.elf"),
         readyBanner(directory+"ready-banner.elf"), countClick(directory+"count-click.elf");
     for(bool native : {false,true})
@@ -670,7 +783,7 @@ void Run(const std::string& directory, std::ofstream& report)
       writeFloat(scenario==0?-10.0f:-18.0f,cpu.gpr[31]+0x0C);
       writeFloat(23.0f,cpu.gpr[31]+0x10);
       const unsigned requested=count==4?1:count+1;
-      click.pollResponse.assign(32,0); click.pollResponse[0]=1;
+      click.pollResponse.assign(LocalTeams::StatusSize,0); click.pollResponse[0]=1;
       click.pollResponse[1]=u8(scenario==4?count:requested); click.pollResponse[9]=1;
       if(scenario==6) click.pollResponse[0]=0;
       if(scenario==7) click.pollResponse[9]=0;
@@ -700,6 +813,39 @@ void Run(const std::string& directory, std::ofstream& report)
               Memory::Read_U8(Runner::R13-0x49AA)==unsigned(scenario==5?2:0),"rejected count change reloaded CSS or accepted change used a cancellable exit");
     }
     report << "PASS: P1 hover+A count cycle 1-4, placed-pick payloads, hitbox/edge/ownership guards, busy denial and CSS-only rebuild request\n";
+    for(bool native : {false,true}) for(unsigned player=0;player<4;++player)
+    {
+      Runner hold(countClick); hold.Status(4,0);
+      Memory::Write_U8(u8(native),Runner::Css+countClick.Symbol("CSSDT_LOCAL_TEAMS_STATUS")+9);
+      PowerPC::ppcState.gpr[31]=Runner::Buffer+0x500;
+      Memory::Write_U8(u8(player),Runner::Buffer+0x504); Memory::Write_U16(30,Runner::Buffer+0x50a);
+      hold.Run(Elf::Base,{Elf::Base+u32(countClick.text.size())});
+      Require(Memory::Read_U16(Runner::Buffer+0x50a)==(native?0:30),"retail B exit can bypass the per-player leave route or stock timer changed");
+    }
+    for(unsigned requested : {0u,1u,3u}) for(bool accepted : {false,true})
+    {
+      const unsigned oldCount=requested==0?3:requested==1?3:2;
+      Runner roster(css); roster.Status(oldCount,0);
+      const auto status=Runner::Css+css.Symbol("CSSDT_LOCAL_TEAMS_STATUS");
+      Memory::Write_U8(1,status+9); Memory::Write_U8(u8(requested),status+34);
+      roster.pollResponse.assign(LocalTeams::StatusSize,0);
+      roster.pollResponse[0]=u8(accepted); roster.pollResponse[9]=1;
+      roster.pollResponse[1]=u8(requested?requested:1);
+      for(unsigned player=0;player<4;++player)
+      {
+        Memory::Write_U8(u8(player+2),Runner::SceneData+0x70+36*player);
+        Memory::Write_U8(u8(player),Runner::SceneData+0x73+36*player);
+        Memory::Write_U8(u8(player%2),Runner::SceneData+0x79+36*player);
+        Memory::Write_U32(Runner::Buffer+0x600+player*0x20,0x804A0BD0+4*player);
+        Memory::Write_U8(0,Runner::Buffer+0x605+player*0x20);
+      }
+      roster.Run(css.Symbol("FN_NATIVE_ROSTER_REQUEST"),{Runner::Return});
+      Require(roster.packets.size()==1 && roster.packets[0].size()==18 && roster.packets[0][0]==0xc8 && roster.packets[0][1]==requested,"automatic roster action sent the wrong request");
+      for(unsigned player=0;player<4;++player)
+        Require(roster.packets[0][2+4*player]==player+2 && roster.packets[0][3+4*player]==player && roster.packets[0][4+4*player]==player%2 && roster.packets[0][5+4*player]==unsigned(player<oldCount),"automatic roster action lost current picks or captured a nonexistent field");
+      Require(Memory::Read_U8(Runner::Css+css.Symbol("CSSDT_NATIVE_RELOAD"))==unsigned(accepted&&requested) && Memory::Read_U8(Runner::R13-0x49aa)==unsigned(accepted?2:0),"automatic roster action exited on rejection or reloaded instead of returning to menu");
+    }
+    report << "PASS: per-player B route preserves the main controller's menu exit; automatic add/remove snapshots current picks and reloads only after acceptance\n";
     {
       Elf loadCss(directory+"load-css.elf");
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=1\nBasePort=49120\n",
@@ -722,7 +868,7 @@ void Run(const std::string& directory, std::ofstream& report)
             Require(packet.size()==18 && ui.ChangeCount(packet.data()+1),
                     "real coordinator did not receive/accept the clicked roster");
           }
-          else Require(packet.size()==10 && packet[0]==0xC5 && packet[1]==0x83,
+          else Require(packet.size()==LocalTeams::PollPayloadSize+1 && packet[0]==0xC5 && packet[1]==0x83,
                        "CSS reload sent an invalid configuration query");
         }
         else
@@ -789,7 +935,7 @@ void Run(const std::string& directory, std::ofstream& report)
       for(unsigned i=0;i<20;++i) Memory::Write_U32(clamp[i],0x80260888+4*i);
       Memory::Write_U32(0x48000000|((Elf::Base-0x802608D8)&0x03FFFFFC),0x802608D8);
       incoming.extraCodeRanges={{0x80260888,0x802608DC}};
-      incoming.pollResponse.assign(32,0); incoming.pollResponse[0]=1; incoming.pollResponse[1]=2; incoming.pollResponse[9]=1;
+      incoming.pollResponse.assign(LocalTeams::StatusSize,0); incoming.pollResponse[0]=1; incoming.pollResponse[1]=2; incoming.pollResponse[9]=1;
       Require(incoming.Run(0x80260888,{0x802622A8})==0x802622A8 && incoming.packets.size()==1 && incoming.packets[0][1]==2,
               "retail incoming cursor/carried-token path bypassed grey-corner count click");
       // Follow the real OnFrame switch. The old flag 1 could be cancelled by
@@ -875,12 +1021,25 @@ void Run(const std::string& directory, std::ofstream& report)
         ui.Run(text.Symbol("CSS_ONLINE_TEXT_THINK")+4,{Runner::Return});
         Require(lines[1]=="P%d: %s|1|Ready" && lines[3]=="P%d: %s|2|Press START",
                 "native CSS does not display each player's independent selection/ready state");
-        Memory::Write_U8(4,status+1); Memory::Write_U8(15,status+4);
+        Memory::Write_U8(4,status+1); Memory::Write_U8(15,status+4); Memory::Write_U8(15,status+32);
         cpu.gpr[3]=Runner::Buffer+0x800; cpu.spr[SPR_LR]=Runner::Return;
         ui.Run(text.Symbol("CSS_ONLINE_TEXT_THINK")+4,{Runner::Return});
         Require(lines[5]=="P%d: %s|3|Ready" && lines[15]=="P%d: %s|4|Ready" &&
                 Memory::Read_U8(Runner::Css+text.Symbol("CSSDT_SPINNER4"))==2,
                 "four-player readiness overwrote stock help rows or left a stale count");
+        Memory::Write_U8(0,status+4); Memory::Write_U8(7,status+32);
+        Memory::Write_U8(2,status+13); Memory::Write_U8(1,status+14); Memory::Write_U8(4,status+15);
+        cpu.gpr[3]=Runner::Buffer+0x800; cpu.spr[SPR_LR]=Runner::Return;
+        ui.Run(text.Symbol("CSS_ONLINE_TEXT_THINK")+4,{Runner::Return});
+        Require(lines[15]=="Waiting for input" &&
+                lines[3]=="P%d: %s|3|Press START" && lines[5]=="P%d: %s|2|Select your character",
+                "unclaimed card label/text or claimed physical-port labels are incorrect");
+        Memory::Write_U8(15,status+32); Memory::Write_U8(3,status+15);
+        cpu.gpr[3]=Runner::Buffer+0x800; cpu.spr[SPR_LR]=Runner::Return;
+        ui.Run(text.Symbol("CSS_ONLINE_TEXT_THINK")+4,{Runner::Return});
+        Require(lines[15]=="P%d: %s|4|Select your character",
+                "claiming a waiting card did not replace its number with the controller label");
+        for(unsigned player=0;player<4;++player) Memory::Write_U8(u8(player),status+12+player);
         Memory::Write_U8(2,status+1);
         Memory::Write_U8(3,status+4); Memory::Write_U8(1,status+5);
         for(unsigned connection : {text.Symbol("MM_STATE_MATCHMAKING"),text.Symbol("MM_STATE_OPPONENT_CONNECTING")})

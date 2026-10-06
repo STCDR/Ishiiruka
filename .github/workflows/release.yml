@@ -6,6 +6,7 @@ on:
 
 jobs:
   package:
+    if: ${{ github.repository == 'project-slippi/Ishiiruka' }}
     name: Release New Slippi Dolphin
     runs-on: ubuntu-latest
     steps:

@@ -461,6 +461,99 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
       Require(status[4] == 0 && status[10] == 0 && !ui.Confirm(first, 100), "held Start readied rematch player automatically");
     }
     report << "PASS: native two-player coordinator, independent ready/unready, persistent rematch choices and keyboard return/rearm guards\n";
+    {
+      File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=1\nBasePort=49120\n",File::GetUserPath(D_CONFIG_IDX)+"local-teams.ini");
+      LocalTeamsCoordinator join(0,nullptr);
+      std::array<u8,48> raw{}; std::array<u8,8> sampled{};
+      u32 frame=10;
+      auto poll=[&](u8 mode=u8(SlippiMatchmaking::TEAMS)) {
+        for(unsigned i=0;i<4;++i){ sampled[2*i]=raw[12*i]; sampled[2*i+1]=raw[12*i+1]; }
+        return join.Poll(mode,sampled.data(),raw.data(),3,frame++);
+      };
+      auto status=poll(u8(SlippiMatchmaking::TEAMS|0x20));
+      Require(status[12]==3 && status[32]==1 && status[33]==1,"port four entry did not bind/suppress only the main card");
+      poll(); raw[0]=0x10;
+      for(unsigned i=0;i<30;++i)status=poll();
+      Require(!status[35] && status[1]==1,"Start added a card before 31 frames");
+      status=poll(); Require(status[35]==0x80 && status[34]==2 && status[1]==1,"long Start did not request an atomic roster reload");
+      u8 change[17]={2, 2,1,0,1};
+      Require(join.ChangeCount(change) && join.state.ports[1]==0 && join.state.saved==1 && join.state.selections[0].character==2,
+              "automatic join lost the existing unready pick or controller owner");
+      Require(!join.state.InputEnabled(1),"joining Start leaked across the CSS reload");
+      raw[2]=80; status=poll();
+      Require(status[33]==2 && !(status[10]&2),"held joining Start escaped suppression or armed readiness");
+      raw[0]=0; status=poll();
+      Require(join.state.InputEnabled(1) && status[33]==0 && raw[2]==80,"releasing Start while holding the stick did not enable the new card");
+      raw.fill(0); poll(); raw[0]=2;
+      for(unsigned i=0;i<30;++i)status=poll();
+      Require(!status[35],"teammate left before 31 frames");
+      status=poll();
+      Require(status[35]==0x41 && status[34]==1,"teammate's long B did not request removing their own card");
+      change[0]=1; change[5]=20; change[6]=2; change[7]=1; change[8]=1;
+      Require(join.ChangeCount(change) && join.state.count==1 && join.state.ports[0]==3 && join.state.saved==1 && join.state.selections[0].character==2,
+              "teammate removal lost the main controller or its pick");
+      raw.fill(0); poll(); join.validated=true; raw[12]=0x10;
+      for(unsigned i=0;i<60;++i)status=poll();
+      Require(!status[35] && join.state.count==1 && !join.ChangeCount(change),"connected rematch allowed a controller roster change");
+      join.validated=false; Require(join.state.Resize(2),"main exit fixture could not add a waiting card");
+      raw.fill(0); poll(); raw[36]=2;
+      for(unsigned i=0;i<30;++i)status=poll();
+      Require(!status[35],"main player exited before 31 frames");
+      status=poll();
+      Require(status[35]==0x40 && status[34]==0,"entering player cannot exit Teams with long B");
+      change[0]=0; Require(join.ChangeCount(change) && !join.state.JoinedMask() && !join.state.saved,"main exit retained controllers or picks from the old roster");
+      raw.fill(0); status=poll(u8(SlippiMatchmaking::TEAMS|0x20));
+      Require(status[12]==3 && status[32]==1 && join.state.Valid(),"reentering Teams after everyone left kept invalid bindings");
+    }
+    report << "PASS: automatic 31-frame Start join, teammate B leave, main B-to-menu, atomic saved picks and connected-rematch guard\n";
+    for(auto phase : {LocalTeams::Phase::Selecting, LocalTeams::Phase::Searching,
+                      LocalTeams::Phase::Waiting, LocalTeams::Phase::EnteringCode, LocalTeams::Phase::Error})
+    for(bool connected : {false,true}) for(unsigned primary=0;primary<4;++primary)
+    {
+      File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=2\nBasePort=49120\n",File::GetUserPath(D_CONFIG_IDX)+"local-teams.ini");
+      LocalTeamsCoordinator exit(0,nullptr);
+      std::array<u8,48> raw{}; const u8 buttons[8]={};
+      exit.Poll(u8(SlippiMatchmaking::TEAMS|0x20),buttons,raw.data(),primary,100);
+      exit.Poll(SlippiMatchmaking::TEAMS,buttons,raw.data(),primary,101);
+      exit.state.ClaimAddedPort((primary+1)%4);
+      exit.Poll(SlippiMatchmaking::TEAMS,buttons,raw.data(),primary,102);
+      exit.state.phase=phase; exit.validated=connected;
+      raw[12*((primary+1)%4)]=2;
+      u32 frame=103;
+      if(connected || phase!=LocalTeams::Phase::Selecting)
+      {
+        for(unsigned i=0;i<35;++i)
+          Require(!exit.Poll(SlippiMatchmaking::TEAMS,buttons,raw.data(),primary,frame++)[35],"teammate B changed a busy roster");
+      }
+      raw.fill(0); exit.Poll(SlippiMatchmaking::TEAMS,buttons,raw.data(),primary,frame++);
+      raw[12*primary]=2;
+      for(unsigned i=0;i<30;++i)
+        Require(!exit.Poll(SlippiMatchmaking::TEAMS,buttons,raw.data(),primary,frame++)[35],"main B exited busy CSS before 31 frames");
+      const auto pending=exit.Poll(SlippiMatchmaking::TEAMS,buttons,raw.data(),primary,frame++);
+      Require(pending[35]==0x40 && pending[34]==0,"main B cannot exit searching/connected CSS");
+      u8 leave[17]={};
+      Require(exit.ChangeCount(leave) && exit.Active() && !exit.state.JoinedMask() && !exit.state.saved,
+              "busy main exit was rejected, retained cards or disabled session cleanup");
+    }
+    report << "PASS: main 31-frame B hold exits idle/searching/connected CSS on every controller port; busy teammate roster changes remain blocked\n";
+    for(unsigned count : {1u,2u,3u,4u}) for(bool connected : {false,true})
+    {
+      File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount="+std::to_string(count)+"\nBasePort=49120\n",File::GetUserPath(D_CONFIG_IDX)+"local-teams.ini");
+      LocalTeamsCoordinator cards(0,nullptr);
+      cards.Poll(SlippiMatchmaking::TEAMS,buttons);
+      for(unsigned player=0;player<4;++player)
+        cards.state.selections[player] = LocalTeams::Selection{u8(player+2),u8(player),u8(player%3),1,100+player};
+      cards.state.saved=(1u<<count)-1;
+      cards.Cleanup();
+      Require(cards.state.saved==(1u<<count)-1 && cards.state.selections[0].character==2 && cards.state.selections[1].team==1,"Z cancellation unexpectedly discarded card memory");
+      cards.validated=connected;
+      cards.state.confirmed=(1u<<count)-1;
+      const auto cleared=cards.Poll(u8(SlippiMatchmaking::TEAMS|0x20),buttons,nullptr,4);
+      Require(cards.Active() && cleared[4]==0 && cleared[10]==0 && cleared[11]==0 && !cards.state.saved,"mode exit did not clear readiness or disabled cleanup of local clients");
+      for(unsigned player=0;player<4;++player)
+        Require(cleared[16+4*player]==0 && cleared[17+4*player]==0 && cleared[18+4*player]==0 && cleared[19+4*player]==0 && cards.state.selections[player].rng==0,"mode exit retained a remembered character, costume, team or saved pick");
+    }
+    report << "PASS: leaving Teams clears all four card caches in idle/connected modes; Z cancellation and normal rematches retain selections\n";
   }
   catch (const std::exception& error) { report << "FAIL: " << error.what() << '\n'; result = 1; }
   enet_deinitialize();
