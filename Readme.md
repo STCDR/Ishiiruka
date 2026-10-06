@@ -5,7 +5,8 @@
 
 First launch offers to import your Slippi Launcher Dolphin settings, controllers and account if this profile is still untouched.
 
-Move the main controller’s cursor into the top-left corner and press A to cycle between 1–4 local players. An unused controller can claim an empty card by moving a stick or pressing a button, or hold Start to add a player-card and join. Each player, then presses Start to ready up. Once everyone is ready, enter your usual Teams room code to start searching.
+Unused controllers can hold Start to add a player-card and join. Alternatively move the main controller's cursor to the top-left corner and press A to cycle between 1–4 local players, then any unused controller can claim the new empty player-card by moving the stick or pressing a button.
+Once everyone has picked and pressed Start to ready up, enter your usual Teams room code to search for a game.
 
 
 ![Change the local player count in Teams](docs/assets/local-player-toggle.gif)
