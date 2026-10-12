@@ -165,7 +165,7 @@ CEXISlippi::CEXISlippi()
 
 	m_slippiserver = SlippiSpectateServer::getInstance();
 	user = std::make_unique<SlippiUser>(slprs_exi_device_ptr);
-  localTeams = std::make_unique<LocalTeamsCoordinator>(slprs_exi_device_ptr, user.get());
+  localTeams = std::make_unique<LocalTeamsCoordinator>(slprs_exi_device_ptr, user.get(), [this] { return getRandomStage(); });
 	g_playbackStatus = std::make_unique<SlippiPlaybackStatus>();
 	matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get());
 	gameFileLoader = std::make_unique<SlippiGameFileLoader>();
@@ -2208,6 +2208,8 @@ void CEXISlippi::prepareOnlineMatchState()
 			stagePool.clear(); // Clear stage pool so that when we call getRandomStage it will use full list
 			if (localTeams->Active())
       {
+        // Re-pick from the service's stage list, as stock Slippi does on connection.
+        localTeams->RefreshStage();
         localSelections = localTeams->PrimarySelection();
         localTeams->PublishSelections(*slippi_netplay);
       }

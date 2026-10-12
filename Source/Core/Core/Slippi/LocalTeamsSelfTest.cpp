@@ -155,7 +155,7 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     // The caller uses a disposable --user directory; no real account or configuration is read.
     File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=4\nLoopbackTest=True\nController1=1\nController2=3\nController3=2\nController4=4\nBasePort=49120\n",
                             File::GetUserPath(D_CONFIG_IDX) + "local-teams.ini");
-    LocalTeamsCoordinator coordinator(0, nullptr);
+    LocalTeamsCoordinator coordinator(0, nullptr, [] { return u16(0x8); });
     std::unique_ptr<SlippiMatchmaking> primaryMm = std::make_unique<SlippiMatchmaking>(0, nullptr);
     std::unique_ptr<SlippiNetplayClient> primary;
     const u8 buttons[8] = {};
@@ -224,12 +224,112 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     primary.reset(); primaryMm.reset();
     Require(!IsOnline(), "coordinator left a network client running");
     report << "PASS: coordinator mapped controllers 1/3/2/4, common delay/checksums, stalls, duplicate rejection, rematch and cleanup\n";
+    // Two native local groups, including guests in the lowest network slots.
+    // Supply a deterministic stage chooser to check the proposal that actually
+    // reaches all four ENet clients, independent of Start order and polling.
+    {
+      File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=2\nBasePort=49120\n",
+                              File::GetUserPath(D_CONFIG_IDX) + "local-teams.ini");
+      const std::array<u16, 5> stages{{0x3, 0x8, 0x1C, 0x1F, 0x20}};
+      std::array<unsigned, 2> draws{};
+      std::array<bool, 2> connected{};
+      std::array<std::unique_ptr<LocalTeamsCoordinator>, 2> teams;
+      std::array<std::unique_ptr<SlippiMatchmaking>, 2> teamMm;
+      std::array<std::unique_ptr<SlippiNetplayClient>, 2> teamPrimary;
+      for (unsigned side = 0; side < 2; ++side)
+        teams[side] = std::make_unique<LocalTeamsCoordinator>(0, nullptr, [&, side] {
+          ++draws[side];
+          // The service list excludes this provisional pre-connection stage.
+          return connected[side] ? stages[(draws[side] - 1 + 2 * side) % stages.size()] : u16(0x2);
+        });
+      std::array<u16, 10> chosen{};
+      for (unsigned game = 0; game < chosen.size(); ++game)
+      {
+        for (unsigned side = 0; side < 2; ++side)
+        {
+          auto& team = *teams[side];
+          team.Poll(SlippiMatchmaking::TEAMS, buttons); // release/arm both Starts
+          const unsigned before = draws[side];
+          for (unsigned pick = 0; pick < 2; ++pick)
+          {
+            const unsigned player = (pick + game + side) % 2;
+            const u8 selection[9] = {u8(side), u8(1 + 2 * side + player), 0, 1, 0, 0, 3, u8(0x80 | player), 0};
+            Require(team.Confirm(selection, 500 + game * 4 + side * 2 + player), "two-team native confirmation");
+            Require(draws[side] == before + pick, "random stage was drawn before the whole local group was ready");
+          }
+          if (game == 0)
+          {
+            teamMm[side] = std::make_unique<SlippiMatchmaking>(0, nullptr);
+            teamMm[side]->SetupLocalTeamsLoopback(u8(2 + side), basePort);
+            team.guests[0].matchmaking = std::make_unique<SlippiMatchmaking>(0, nullptr);
+            team.guests[0].matchmaking->SetupLocalTeamsLoopback(u8(side), basePort);
+          }
+        }
+        if (game == 0)
+        {
+          Await([&] {
+            bool ready = true;
+            for (unsigned side = 0; side < 2; ++side)
+              ready &= teams[side]->Tick(*teamMm[side], nullptr) == SlippiMatchmaking::CONNECTION_SUCCESS;
+            return ready;
+          }, "two local teams did not connect");
+          for (unsigned side = 0; side < 2; ++side)
+          {
+            teamPrimary[side] = teamMm[side]->GetNetplayClient();
+            connected[side] = true;
+            teams[side]->RefreshStage(); // use the newly received service list
+          }
+        }
+        std::array<u16, 2> proposals{};
+        for (unsigned side = 0; side < 2; ++side)
+        {
+          proposals[side] = teams[side]->PrimarySelection().stageId;
+          Require(std::find(stages.begin(), stages.end(), proposals[side]) != stages.end(),
+                  "local group retained a stage outside the service list");
+          teams[side]->PublishSelections(*teamPrimary[side]);
+        }
+        Await([&] { return teams[0]->AllReady(*teamPrimary[0]) && teams[1]->AllReady(*teamPrimary[1]); },
+              "two-team rematch did not become ready");
+        for (unsigned side = 0; side < 2; ++side)
+        {
+          auto& team = *teams[side];
+          for (auto* client : {teamPrimary[side].get(), team.guests[0].netplay.get()})
+          {
+            const auto info = client->GetMatchInfoSnapshot();
+            u16 selected = 0;
+            auto check = [&](const SlippiPlayerSelections& selection) {
+              Require(selection.isStageSelected && selection.stageId == proposals[selection.playerIdx % 2],
+                      "primary or guest replaced the group's random stage proposal");
+              if (selection.playerIdx == 0) selected = selection.stageId;
+            };
+            check(info.localPlayerSelections);
+            for (const auto& selection : info.remotePlayerSelections) check(selection);
+            Require(selected == proposals[0], "four peers disagreed about the lowest-slot stage choice");
+          }
+          team.PublishSelections(*teamPrimary[side]);
+          team.Tick(*teamMm[side], teamPrimary[side].get());
+          Require(draws[side] == game + 2 && team.PrimarySelection().stageId == proposals[side],
+                  "readiness polling redrew the stage or rematch reused an old proposal");
+        }
+        chosen[game] = proposals[0];
+        if (game % stages.size())
+          Require(std::find(chosen.begin() + game - game % stages.size(), chosen.begin() + game, chosen[game]) == chosen.begin() + game,
+                  "local group lost the chooser's stage rotation");
+        for (unsigned side = 0; side < 2; ++side)
+        { teamPrimary[side]->StartSlippiGame(); teams[side]->StartGame(); }
+      }
+      for (auto& team : teams) team->Cleanup();
+      for (auto& client : teamPrimary) client.reset();
+      for (auto& mm : teamMm) mm.reset();
+      Require(!IsOnline(), "two-team stage fixture leaked a network client");
+      report << "PASS: two native local teams rotate stages over ten games; both Start orders, guest stage authority, service-list refresh and stable four-peer agreement\n";
+    }
     // Three local sessions and an independent fourth peer. The transport is
     // localhost here; normal ThreeLocal mode still uses real matchmaking.
     {
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=3\nLoopbackTest=False\nController1=1\nController2=3\nController3=2\nBasePort=49120\n",
                               File::GetUserPath(D_CONFIG_IDX) + "local-teams.ini");
-      LocalTeamsCoordinator trio(0, nullptr);
+      LocalTeamsCoordinator trio(0, nullptr, [] { return u16(0x8); });
       auto trioMm = std::make_unique<SlippiMatchmaking>(0, nullptr);
       auto friendMm = std::make_unique<SlippiMatchmaking>(0, nullptr);
       auto pickThree = [&] {
@@ -381,7 +481,7 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     {
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=" + std::to_string(count) + "\nLoopbackTest=False\nBasePort=49120\n",
                               File::GetUserPath(D_CONFIG_IDX) + "local-teams.ini");
-      LocalTeamsCoordinator lobby(0, nullptr);
+      LocalTeamsCoordinator lobby(0, nullptr, [] { return u16(0x8); });
       for (u8 i = 0; i < count; ++i)
       {
         const auto status = lobby.Poll(SlippiMatchmaking::TEAMS, buttons);
@@ -399,7 +499,7 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     {
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=2\nBasePort=49120\n",
                               File::GetUserPath(D_CONFIG_IDX) + "local-teams.ini");
-      LocalTeamsCoordinator ui(0, nullptr);
+      LocalTeamsCoordinator ui(0, nullptr, [] { return u16(0x8); });
       ui.Poll(SlippiMatchmaking::TEAMS, buttons);
       u8 change[LocalTeams::CountPayloadSize] = {3, 2,1,0,1, 20,2,1,1, 0,0,0,0, 0,0,0,0};
       Require(ui.ChangeCount(change) && ui.state.count == 3 && ui.NativeCSS() && ui.state.saved == 3,
@@ -429,7 +529,7 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     {
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=2\nController1=1\nController2=3\nBasePort=49120\n",
                               File::GetUserPath(D_CONFIG_IDX) + "local-teams.ini");
-      LocalTeamsCoordinator ui(0, nullptr);
+      LocalTeamsCoordinator ui(0, nullptr, [] { return u16(0x8); });
       const auto initial = ui.Poll(u8(SlippiMatchmaking::TEAMS | 0x80), buttons);
       Require(initial[9] && initial[12] == 0 && initial[13] == 2 && initial[10] == 0, "native CSS config query changed input readiness or mapping");
       ui.Poll(SlippiMatchmaking::TEAMS, buttons);
@@ -463,7 +563,7 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     report << "PASS: native two-player coordinator, independent ready/unready, persistent rematch choices and keyboard return/rearm guards\n";
     {
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=1\nBasePort=49120\n",File::GetUserPath(D_CONFIG_IDX)+"local-teams.ini");
-      LocalTeamsCoordinator join(0,nullptr);
+      LocalTeamsCoordinator join(0,nullptr, [] { return u16(0x8); });
       std::array<u8,48> raw{}; std::array<u8,8> sampled{};
       u32 frame=10;
       auto poll=[&](u8 mode=u8(SlippiMatchmaking::TEAMS)) {
@@ -511,7 +611,7 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     for(bool connected : {false,true}) for(unsigned primary=0;primary<4;++primary)
     {
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=2\nBasePort=49120\n",File::GetUserPath(D_CONFIG_IDX)+"local-teams.ini");
-      LocalTeamsCoordinator exit(0,nullptr);
+      LocalTeamsCoordinator exit(0,nullptr, [] { return u16(0x8); });
       std::array<u8,48> raw{}; const u8 buttons[8]={};
       exit.Poll(u8(SlippiMatchmaking::TEAMS|0x20),buttons,raw.data(),primary,100);
       exit.Poll(SlippiMatchmaking::TEAMS,buttons,raw.data(),primary,101);
@@ -539,7 +639,7 @@ int RunLocalTeamsSelfTest(const std::string& reportPath)
     for(unsigned count : {1u,2u,3u,4u}) for(bool connected : {false,true})
     {
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount="+std::to_string(count)+"\nBasePort=49120\n",File::GetUserPath(D_CONFIG_IDX)+"local-teams.ini");
-      LocalTeamsCoordinator cards(0,nullptr);
+      LocalTeamsCoordinator cards(0,nullptr, [] { return u16(0x8); });
       cards.Poll(SlippiMatchmaking::TEAMS,buttons);
       for(unsigned player=0;player<4;++player)
         cards.state.selections[player] = LocalTeams::Selection{u8(player+2),u8(player),u8(player%3),1,100+player};

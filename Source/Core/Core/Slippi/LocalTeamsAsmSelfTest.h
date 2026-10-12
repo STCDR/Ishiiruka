@@ -204,6 +204,8 @@ void Run(const std::string& directory, std::ofstream& report)
                 "local Start left first-match winner state uninitialized (routes to SSS)");
         Require(Memory::Read_U8(Runner::R13 - 0x49AA) == 0, "early local Start opened another screen");
         Require(first.packets.size() == 1 && first.packets[0][0] == 0xC6, "early Start must only save a local pick");
+        Require(first.packets[0][5] == 0 && first.packets[0][6] == 0 && first.packets[0][7] == 3,
+                "sequential local Start proposed a fixed stage instead of random");
       }
       Runner last(css); last.Status(count, count - 1);
       last.Run(Elf::Base, exits);
@@ -211,6 +213,7 @@ void Run(const std::string& directory, std::ofstream& report)
       const auto callback = Memory::Read_U32(Runner::R13 + css.Symbol("OFST_R13_CALLBACK"));
       Require(callback == css.Symbol("FN_TX_FIND_MATCH"), "code entry did not install native matchmaking callback");
       Require(last.packets.size() == 1 && last.packets[0][0] == 0xC6, "search began before room code confirmation");
+      Require(last.packets[0][7] == 3, "final sequential Start did not request a random stage");
       // Native keyboard letters are two-byte Shift-JIS (full-width "00011").
       const u8 code[18] = {0x82, 0x4F, 0x82, 0x4F, 0x82, 0x4F, 0x82, 0x50, 0x82, 0x50};
       for (unsigned i = 0; i < 9; ++i)
@@ -436,10 +439,33 @@ void Run(const std::string& directory, std::ofstream& report)
               "native Start sent the wrong logical-player discriminator");
       Require(ready.packets[0][1] == player%2 && ready.packets[0][2] == characters[player] && ready.packets[0][3] == player+1,
               "native Start captured another player's character, costume or team");
+      Require(ready.packets[0][5] == 0 && ready.packets[0][6] == 0 && ready.packets[0][7] == 3,
+              "native Start proposed a fixed stage instead of random");
       Require(Memory::Read_U8(Runner::R13 - 0x49AA) == 4 && Memory::Read_U8(Runner::R13 - 0x49A7) == 0,
               "final native Start did not open room entry on the primary controller");
     }
     report << "PASS: native multiplayer cursor-path override, any of 1-4 players can ready last, exact independent selections and primary room entry\n";
+    for (unsigned held : {1u, 2u, 3u})
+    {
+      Runner ready(css); ready.Status(2, 0);
+      const auto status = Runner::Css + css.Symbol("CSSDT_LOCAL_TEAMS_STATUS");
+      Memory::Write_U8(1, status + 9); Memory::Write_U8(3, status + 10); Memory::Write_U8(u8(held), status + 11);
+      for (unsigned player = 0; player < 2; ++player)
+      {
+        const auto token = Runner::Buffer + 0x100 * (player + 1);
+        Memory::Write_U32(token, 0x804A0BD0 + 4 * player);
+        Memory::Write_U8(0, token + 5);
+        Memory::Write_U8(u8(2 + player), Runner::SceneData + 0x70 + 36 * player);
+      }
+      ready.Run(Elf::Base, exits);
+      Require(ready.packets.size() == (held == 3 ? 2u : 1u), "simultaneous Starts lost a local confirmation");
+      for (const auto& packet : ready.packets)
+        Require(packet[5] == 0 && packet[6] == 0 && packet[7] == 3,
+                "one or both native Starts requested a fixed stage");
+      Require(Memory::Read_U8(status + 4) == held && Memory::Read_U8(Runner::R13 - 0x49AA) == (held == 3 ? 4 : 0),
+              "native Start readiness changed with simultaneous inputs");
+    }
+    report << "PASS: primary, teammate and simultaneous Starts all request random stages\n";
     for(unsigned count : {1u,2u,3u,4u})
     {
       Runner empty(css); empty.Status(count,0);
@@ -850,7 +876,7 @@ void Run(const std::string& directory, std::ofstream& report)
       Elf loadCss(directory+"load-css.elf");
       File::WriteStringToFile("[LocalTeams]\nEnabled=True\nCount=1\nBasePort=49120\n",
                               File::GetUserPath(D_CONFIG_IDX)+"local-teams.ini");
-      LocalTeamsCoordinator ui(0,nullptr);
+      LocalTeamsCoordinator ui(0,nullptr, [] { return u16(0x8); });
       const u8 buttons[8]={};
       // Use the real coordinator for each command and each new CSS query.
       // Only retail game services are stubbed; the DMA pointer still rounds

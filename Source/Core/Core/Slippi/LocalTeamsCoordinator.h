@@ -1,13 +1,14 @@
 #pragma once
 #include "Core/Slippi/LocalTeamsState.h"
 #include "Core/Slippi/SlippiMatchmaking.h"
+#include <functional>
 #include <memory>
 
 // Called exclusively by the CPU/EXI thread. Matchmaking and ENet retain their own threads.
 class LocalTeamsCoordinator
 {
 public:
-  LocalTeamsCoordinator(uintptr_t device, SlippiUser* user);
+  LocalTeamsCoordinator(uintptr_t device, SlippiUser* user, std::function<u16()> randomStage);
   bool Active() const { return enabled && active; }
   LocalTeams::State state;
   std::array<u8, LocalTeams::StatusSize> Poll(u8 mode, const u8* buttons, const u8* reports = nullptr, unsigned enteringPort = 4, u32 frame = 0);
@@ -28,6 +29,7 @@ public:
   void SetSearchCode(const std::string& shiftJisCode);
   bool Loopback() const { return loopback; }
   bool NativeCSS() const { return nativeCSS && !loopback; }
+  void RefreshStage();
   SlippiPlayerSelections PrimarySelection() const;
 private:
   friend int RunLocalTeamsSelfTest(const std::string& reportPath);
@@ -38,6 +40,8 @@ private:
     LocalTeams::Pad previous{};
   };
   std::array<Session, 3> guests;
+  std::function<u16()> randomStage;
+  u16 stageId = 0;
   uintptr_t device;
   SlippiUser* user;
   bool enabled = false, active = false, validated = false, published = false;

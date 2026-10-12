@@ -8,7 +8,8 @@
 #include <sstream>
 #include <stdexcept>
 
-LocalTeamsCoordinator::LocalTeamsCoordinator(uintptr_t device_, SlippiUser* user_) : device(device_), user(user_)
+LocalTeamsCoordinator::LocalTeamsCoordinator(uintptr_t device_, SlippiUser* user_, std::function<u16()> randomStage_)
+    : randomStage(std::move(randomStage_)), device(device_), user(user_)
 {
   IniFile ini;
   ini.Load(File::GetUserPath(D_CONFIG_IDX) + "local-teams.ini");
@@ -132,6 +133,8 @@ bool LocalTeamsCoordinator::Confirm(const u8* payload, u32 rng)
     if (!NativeCSS() || !state.ConfirmPlayer(payload[7] & 3, selection, payload[3] == 1)) return false;
   }
   else if (!state.Confirm(selection, payload[3] != 0)) return false;
+  // One proposal per local group, independent of which teammate readies last.
+  if (state.AllConfirmed()) RefreshStage();
   if (state.AllConfirmed() && !loopback && !validated) state.phase = LocalTeams::Phase::EnteringCode;
   ShowStatus();
   return true;
@@ -182,6 +185,11 @@ bool LocalTeamsCoordinator::ChangeCount(const u8* payload)
   return true;
 }
 
+void LocalTeamsCoordinator::RefreshStage()
+{
+  stageId = randomStage();
+}
+
 SlippiPlayerSelections LocalTeamsCoordinator::Selection(unsigned index) const
 {
   const auto& value = state.selections[index];
@@ -190,7 +198,7 @@ SlippiPlayerSelections LocalTeamsCoordinator::Selection(unsigned index) const
   result.teamId = value.team; result.alt_stage_mode = value.altStage;
   result.rngOffset = value.rng;
   result.isCharacterSelected = true;
-  result.stageId = 0x1F; result.isStageSelected = true;
+  result.stageId = stageId; result.isStageSelected = true;
   return result;
 }
 SlippiPlayerSelections LocalTeamsCoordinator::PrimarySelection() const { return Selection(0); }
