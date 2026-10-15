@@ -204,14 +204,16 @@ void ControllerInterface::RemoveDevice(std::function<bool(const ciface::Core::De
 //
 // Update input for all devices
 //
-void ControllerInterface::UpdateInput()
+void ControllerInterface::UpdateInput(InputUpdate group)
 {
 	// Don't block the UI or CPU thread (to avoid a short but noticeable frame drop)
 	if (m_devices_mutex.try_lock())
 	{
 		std::lock_guard<std::mutex> lk(m_devices_mutex, std::adopt_lock);
 		for (const auto& d : m_devices)
-			d->UpdateInput();
+			if (group == InputUpdate::All ||
+				(group == InputUpdate::Gamepads) == d->IsGamepad())
+				d->UpdateInput();
 	}
 }
 

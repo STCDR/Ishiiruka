@@ -60,6 +60,7 @@ IPC_HLE_PERIOD: For the Wii Remote this is the call schedule:
 #include "Core/IPC_HLE/WII_IPC_HLE.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "VideoCommon/Fifo.h"
 
 namespace SystemTimers
@@ -198,6 +199,9 @@ static void ThrottleCallback(u64 last_time, s64 cyclesLate)
 		else if (diff > 0)
 			Common::SleepCurrentThread(diff);
 	}
+#ifdef _WIN32
+	g_controller_interface.UpdateInput(ControllerInterface::InputUpdate::Gamepads);
+#endif
 	CoreTiming::ScheduleEvent(next_event - cyclesLate, et_Throttle, last_time + 1);
 }
 

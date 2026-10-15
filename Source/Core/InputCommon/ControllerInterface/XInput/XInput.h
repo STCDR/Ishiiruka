@@ -89,6 +89,7 @@ private:
 
 public:
 	void UpdateInput() override;
+	bool IsGamepad() const override { return true; }
 
 	Device(const XINPUT_CAPABILITIES& capabilities, u8 index);
 

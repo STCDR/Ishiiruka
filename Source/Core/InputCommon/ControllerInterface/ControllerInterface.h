@@ -123,7 +123,8 @@ public:
 	bool IsInit() const { return m_is_init; }
 	void UpdateReference(ControlReference* control,
 		const ciface::Core::DeviceQualifier& default_device) const;
-	void UpdateInput();
+	enum class InputUpdate { All, Gamepads, Other };
+	void UpdateInput(InputUpdate group = InputUpdate::All);
 
 	void RegisterHotplugCallback(std::function<void(void)> callback);
 	void InvokeHotplugCallbacks() const;

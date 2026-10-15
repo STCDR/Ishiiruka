@@ -627,8 +627,8 @@ void ChangeDeviceDeterministic(SIDevices device, int channel)
 
 void UpdateDevices()
 {
-	// Update inputs at 240 hz
-	g_controller_interface.UpdateInput();
+	// Gamepads are refreshed by the existing 1 kHz throttle callback.
+	g_controller_interface.UpdateInput(ControllerInterface::InputUpdate::Other);
 
 	if(SConfig::GetInstance().iPollingMethod == POLLING_ONSIREAD)
 	{

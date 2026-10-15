@@ -61,6 +61,7 @@ private:
 
 public:
 	void UpdateInput() override;
+	bool IsGamepad() const override { return true; }
 
 	Joystick(const LPDIRECTINPUTDEVICE8 device);
 	~Joystick();
